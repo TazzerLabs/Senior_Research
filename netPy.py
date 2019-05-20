@@ -11,6 +11,7 @@ import sys
 import optparse
 import argparse
 import os
+import re
 
 """
  Functions: getPcapTime(Pcap, option)
@@ -83,7 +84,7 @@ def getPcapRanged(RedFilename='TokRedWin.txt'):
 
 
 # Filters the pcap list even further by seeing which ones have a regular expression inside of the file themselves
-def RegExFilter(pcapsList, inputF="RegExTok.txt"):
+def RegExFilter(pcapsList, inputF="RegExTok.txt", output="PcapTokenInNet.txt"):
 
     RegExs = []
 
@@ -93,7 +94,7 @@ def RegExFilter(pcapsList, inputF="RegExTok.txt"):
             RegExs.append(line[0])
 
     # for every pcap in the list
-    with open("PcapTokenInNet.txt", 'w') as output:
+    with open(output, 'w') as output:
         for pcaps in pcapsList:
             for RegEx in RegExs:
                 # Check to see if the pcap has the Regular expression (Later will be a list of RegExs)
@@ -113,6 +114,103 @@ def RegExFilter(pcapsList, inputF="RegExTok.txt"):
                     output.write(MatchInfo)
                     break
 
+# Will extract payload from the tcpstream and put inside a pcapNameFlow.txt file that houses the payload
+# which will have the exploits inside of them
+def extractPayload(filename="PcapTokenInNet.txt", serviceID='HTTP/1.1 200 OK', output="Flow.txt"):
+
+    # These are the usual output leads from the ngrep command executed in the previous run
+    # Just need to parse through ngrep output to find gems that (when pushed through tcpflow) 
+    # will give a conversation between the src ip and dst ip during the game for a specific service 
+    # identifer
+    Input = 'input: '
+    match = 'match: '
+    IP = 'T '
+    tcpFlowRecords = []
+    regex = []
+
+    # Parses through the matching flag data and pinpoints pcap names, ips, regexs, and
+    # service identification pattern, for eliza: HTTP/1.1 200 OK and
+    # extracts payload for further analysis
+    with open(output, 'r') as file:
+        lines = file.readlines()
+        for i in range(len(lines)):
+            if Input in lines[i]:
+                a = lines[i].split(Input)
+                pcapName = a[1]
+                pcapName = pcapName.split("\n")[0]
+                teamflow = pcapName.split(".")[0]
+                teamflow = teamflow + output
+                if match in lines[i+2]:
+                    m = lines[i+2].split(match)
+                    regex.append(m[1])
+                    if IP in lines[i+4]:
+                        b = lines[i+4].split(IP)
+                        b = b[1].split(" -> ")
+                        sip = b[0]
+                        sip = sip.split(":")[0]
+                        b = b[1].split(" [")
+                        dip = b[0]
+                        dip = dip.split(":")[0]
+                        if serviceID in lines[i+5]:
+                            with  open (teamflow, 'w+') as f:
+                                print ("executing tcpflow")
+                                cmd = "tcpflow -r " + pcapName + " -c host " + sip + " and " + dip + " > " + teamflow
+                                flowProc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+                                flowProc.communicate(input='\n')
+                            tcpFlowRecords.append(teamflow)
+
+
+    # Cut off the extra data from the output and have exact data from eliza service exploit used in game
+    #if serviceID == 'HTTP/1.1 200 OK':
+    #    extractEliza(tcpFlowRecords, regex)
+    # may have output that is a txt file so just now invent a function that will learn polymorphisms of this exploit...
+
+
+# Will be able to cut out excess data from the payload and fully have exploit to be parsed for any polymorphisms from other eliza variations
+def extractEliza(tcpFlows, partialToken):
+
+    Flag = ""
+    exploit = []
+
+    with open(tcpFlows, 'r') as Flow:
+        for lines in Flow:
+            line = lines.rstrip()
+
+            #Find the start of the exploit
+            if re.search('SELECT', line):
+                
+                for subLines in lines:
+                    subLine = subLines.rstrip()
+
+                    # Exploit contains help then info eliza, then GET, then flag
+                    if re.search('help', subLine):
+                        
+                        for subs in subLines:
+                            sub = subs.rstrip()
+
+                            if re.search('info', sub):
+
+                                for subbs in subs:
+                                    subb = subb.rstrip()
+
+                                    if re.search('GET', subb):
+
+                                        for liners in subbs:
+                                            liner = liners.rstrip()
+
+                                             # Find flag and the end of the exploit
+                                            if re.search(partialToken, liner):
+                                                exploit.append(line)
+                                                exploit.append(subLine)
+                                                exploit.append(sub)
+                                                exploit.append(subb)
+                                                exploit.append(liner)
+                                                Flag = liner
+                                                break
+
+    # exploit has the eliza exploit used to get the flag + the flag
+    # and Flag has the flag that was captured (extra data)
+    print (exploit)
 
 
 # Crates Regular expressions out of partial tokens extracted from the Postgres SQL database
@@ -166,8 +264,25 @@ if __name__ == '__main__':
         RegExFilter(getPcapRanged())
     elif args.mode == 3:
         RegExFilter(getPcapRanged(), CreateRegEx())
+    elif args.mode == 4:
+        tcpflowRecorder = extractPayload()
+        # Call function to extractEliza()
+    elif args.mode == 5: # for the user specified
+        inputf = input("What partial flag txt file do you want converted to a Regular expression txt file? ")
+        outf = input("What name do you want to give the output file? ")
+        CreateRegEx(inputf, outputf)
+        winInf = input("What txt file has the time windows for the relavant pcaps? ")
+        regOutf = input("What filename do you want to give for the file that will have the flag in the network? ")
+        RegExFilter(getPcapRanged(winInf), outf, regOutf)
+        inputPayload = input("What txt file contains the ngrep output of the Pcpaps and Flags on the network? ")
+        inputService = input("What service are we searching for? ")
+        outputExtract = input("What output txt file do you want the tcpflow in? ")
+        extractPayload(inputPayload, inputService, outputExtract)
+    elif args.mode == 6: #Eliza
+        RegExFilter(getPcapRanged(), CreateRegEx( "elizaTok.txt", "elizaRegExTok.txt" ), "elizaGrep.txt")
+        extractPayload("elizaGrep.txt")
     else:
-        parser.error("Mode can only be a value of 1 or 2!\n")
+        parser.error("Modes available are:\n 1) CreateRegEx\n2) RegExFilter & getPcapRanged\n3) RegExFilter & getPcapRanged & CreateRegEx\n 4) extractPayload\n5) User input mode\n")
 
 
 
